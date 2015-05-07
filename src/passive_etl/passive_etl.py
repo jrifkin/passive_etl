@@ -37,16 +37,25 @@ def read_spss(path = ''):
     return df
 
 
+def to_sql(df, connection = None):
+    #take in data fram and push to sql
+    import sqlalchemy
+
+    if connection == None:
+        connection = 'mysql+mysqldb://root:morpheus@localhost/test'
+
+    engine = sqlalchemy.create_engine(connection)
+
+    df.to_sql('passive_data',engine, index = False, chunksize = 100, if_exists='replace')
+
 
 def main():
     #quarterback module
     data = read_spss()
     
     #push data to sql
+    to_sql(data)
 
-
-    print data.tail()
-    print len(data)
 
 if __name__ == '__main__':
 
