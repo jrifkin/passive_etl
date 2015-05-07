@@ -1,15 +1,39 @@
+from datetime import datetime
 
 def read_spss(path = ''):
     import savReaderWriter as spss
     import pandas as pd
 
     if len(path)==0:
-        path = r"O:\MSI\PERSONAL FOLDERS\Files for Jake\Passive\passive_etl\Data\Dimension + P3 Data.sav"
-    
-    data = spss.SavReader(path, returnHeader=True)
+        path = r"O:\MSI\PERSONAL FOLDERS\Files for Jake\Passive\Passive Panel\Data\Dimension+P3 data_06-May-2015.sav"
 
+    print '[INFO] Starting SPSS import on file:\n%s' %path
+    
+    load_start = datetime.now()
+    data = spss.SavReader(path, returnHeader=True)
     df = pd.DataFrame(list(data),columns=data.varNames)
-        
+    load_finish = datetime.now()
+    
+    timer = load_finish-load_start
+    initial_rows = len(df)
+
+    print '\n[INFO] Total records import from spss: %i' %initial_rows
+    print '[INFO] In %s seconds at %s records/second' %(timer,initial_rows/timer.seconds)
+    
+    #keep only necessary columns
+    keep_cols =  ["Respondent_ID","Respondent_Serial","NETWORK","SMARTPHONE_BRAND","SMARTPHONE_MODEL","APP_DOWNLOAD","EMAIL_CAPTURE","EMAIL_CONFIRM","resp_gender","resp_age","EMPLOYMENT","PERSONAL_USE01","PERSONAL_USE02","PERSONAL_USE03","PERSONAL_USE04","PERSONAL_USE05","PERSONAL_USE06","PERSONAL_USE07","PERSONAL_USE08","PERSONAL_USE09","PERSONAL_USE10","PERSONAL_USE11","PERSONAL_USE12","PERSONAL_USE13","PERSONAL_USE14","PERSONAL_USE15","PERSONAL_USE16","DEVICE_TYPE","CARRIER","DATA_PLAN","DATA_LIMIT"]
+    kill_cols = [col for col in data.varNames if not(col in keep_cols)]
+            
+    df.drop(kill_cols,inplace=True,axis=1)
+
+    #only keep records of respondents that answered 1 to APP_DOWNLOAD
+    df = df[df.APP_DOWNLOAD == 1]
+    
+    cleaned_rows = len(df)
+
+    print '[INFO] Number of records cleaned: %d' %(initial_rows - cleaned_rows)
+    print '[INFO] Number of records left after cleaning: %d' %cleaned_rows
+    
     return df
 
 
@@ -17,10 +41,14 @@ def read_spss(path = ''):
 def main():
     #quarterback module
     data = read_spss()
+    
+    #push data to sql
+
+
     print data.tail()
+    print len(data)
 
 if __name__ == '__main__':
-    from datetime import datetime
 
     start_time = datetime.now()
 
