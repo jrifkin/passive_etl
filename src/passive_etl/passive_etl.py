@@ -40,21 +40,37 @@ def read_spss(path = ''):
 def to_sql(df, connection = None):
     #take in data fram and push to sql
     import sqlalchemy
+    import pyodbc
+
+    Driver = 'pyodbc'
+    Server = 'mstelms.extranet.iext\\mstelms'
+    User = 'ipsosgroup\\jake.rifkin'
+    Password = 'Darklord18'
+    # If the database you want to connect to is the default
+    # for the SQL Server login, omit this attribute     
+    Database = 'PassiveTest'
+
 
     if connection == None:
+        #if no connection, default to local mysql
         connection = 'mysql+mysqldb://root:morpheus@localhost/test'
-
-    engine = sqlalchemy.create_engine(connection)
+        engine = sqlalchemy.create_engine(connection)
+    else:
+        engine = sqlalchemy.create_engine('mssql://',creator=connect)
 
     df.to_sql('passive_data',engine, index = False, chunksize = 100, if_exists='replace')
 
+def connect():
+    return pyodbc.connect("DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest")
 
 def main():
     #quarterback module
     data = read_spss()
-    
+
+    my_connec = "DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest"
+
     #push data to sql
-    to_sql(data)
+    to_sql(data,my_connec)
 
 
 if __name__ == '__main__':
