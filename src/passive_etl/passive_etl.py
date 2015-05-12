@@ -56,9 +56,9 @@ def to_sql(df, connection = None):
         connection = 'mysql+mysqldb://root:morpheus@localhost/test'
         engine = sqlalchemy.create_engine(connection)
     else:
-        engine = sqlalchemy.create_engine('mssql://',creator=connect)
+        engine = sqlalchemy.create_engine('mssql+pyodbc://',creator=connect)
 
-    df.to_sql('passive_data',engine, index = False, chunksize = 100, if_exists='replace')
+    df.to_sql('passive_data',engine, index = False, chunksize = 100, if_exists='replace', schema='dbo')
 
 def connect():
     return pyodbc.connect("DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest")
