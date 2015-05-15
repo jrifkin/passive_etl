@@ -25,6 +25,7 @@
     <Compile Include="passive_etl.py" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="config.conf" />
     <Content Include="Spssio32.dll" />
   </ItemGroup>
   <PropertyGroup>

@@ -1,17 +1,51 @@
 from datetime import datetime
+import savReaderWriter as spss
+import pandas as pd
+import sqlalchemy
+import pyodbc
+import ConfigParser
+import os
+import glob
+import operator
 
-def read_spss(path = ''):
-    import savReaderWriter as spss
-    import pandas as pd
+ops = {"==": operator.eq,
+        "!=": operator.ne,
+        "<": operator.lt,
+        ">": operator.gt,
+        "<=": operator.le,
+        ">=": operator.ge}
 
-    if len(path)==0:
-        path = r"O:\MSI\PERSONAL FOLDERS\Files for Jake\Passive\Passive Panel\Data\Dimension+P3 data_06-May-2015.sav"
+def get_file(path='',dir=''):
+    #determine a file to load to sql, must be .sav at this point
 
-    print '[INFO] Starting SPSS import on file:\n%s' %path
+    if os.path.isfile(path):
+        #use specific file
+        file = path
+    elif os.path.isdir(dir):
+        #find most recently updated .sav file
+        file = max(glob.iglob(os.path.join(dir,'*.sav')),key=os.path.getctime)
+    else:
+        raise ValueError('No .sav has been specified or can be found in the config directory. Check the config.conf file and enusre that a valid path or dir has been specified')
+
+    return file
+
+
+def read_spss(cf):
+
+    #determine file to open
+    spss_file = get_file(cf['path'],cf['dir'])
+   
+    print '[INFO] Starting SPSS import on file:\n%s' %spss_file
+    
+    if len(cf['kill_cols']) == 0:
+        select_vars = cf['keep_cols'] if len(cf['keep_cols']) > 0 else None
+    else:
+        check_vars = spss.SavHeaderReader(spss_file).varNames
+        select_vars = [x for x in check_vars if not(x in cf['kill_cols'])]
     
     load_start = datetime.now()
-    data = spss.SavReader(path, returnHeader=True)
-    df = pd.DataFrame(list(data),columns=data.varNames)
+    data = spss.SavReader(spss_file, returnHeader=False,selectVars=select_vars)
+    df = pd.DataFrame(list(data),columns=select_vars)
     load_finish = datetime.now()
     
     timer = load_finish-load_start
@@ -19,58 +53,131 @@ def read_spss(path = ''):
 
     print '\n[INFO] Total records import from spss: %i' %initial_rows
     print '[INFO] In %s seconds at %s records/second' %(timer,initial_rows/timer.seconds)
-    
-    #keep only necessary columns
-    keep_cols =  ["Respondent_ID","Respondent_Serial","NETWORK","SMARTPHONE_BRAND","SMARTPHONE_MODEL","APP_DOWNLOAD","EMAIL_CAPTURE","EMAIL_CONFIRM","resp_gender","resp_age","EMPLOYMENT","PERSONAL_USE01","PERSONAL_USE02","PERSONAL_USE03","PERSONAL_USE04","PERSONAL_USE05","PERSONAL_USE06","PERSONAL_USE07","PERSONAL_USE08","PERSONAL_USE09","PERSONAL_USE10","PERSONAL_USE11","PERSONAL_USE12","PERSONAL_USE13","PERSONAL_USE14","PERSONAL_USE15","PERSONAL_USE16","DEVICE_TYPE","CARRIER","DATA_PLAN","DATA_LIMIT"]
-    kill_cols = [col for col in data.varNames if not(col in keep_cols)]
-            
-    df.drop(kill_cols,inplace=True,axis=1)
+    print '[INFO] Creating value dictionaries'
 
-    #only keep records of respondents that answered 1 to APP_DOWNLOAD
-    df = df[df.APP_DOWNLOAD == 1]
+    #create value dictionaries
+    my_dict = data.valueLabels
+    punch_definitions = pd.DataFrame(data.valueLabels)
+
+    #punch_definitions is not responding to the selectVars input so manually cleaning out unwanted mapping labels
+    for col in punch_definitions.columns:
+        if not(col  in select_vars):
+            punch_definitions.drop(col,inplace=True,axis=1)
     
+    print '[INFO] All data loaded in memory successfully'
+
+    return df,punch_definitions
+
+
+def get_condition(str_logic):
+    if len(str_logic[0])==0:
+        return None
+
+    col = []
+    op = []
+    val = []
+
+    for logic in str_logic:
+        col.append(logic[0])
+        op.append(ops[logic[1]])
+        try:
+            val.append(int(logic[2]))
+        except:
+            val.append(logic[2])
+
+    return col,op,val
+
+
+def clean_data(cf,df):
+
+    col,op,val = get_condition(cf['row_logic'])
+    #Config scripted logic
+    for i in range(len(col)):
+        df = df[op[i](df[col[i]],val[i])]
+
+    #OLD: manually scripted
+    #df = df[df.APP_DOWNLOAD == 1]
     cleaned_rows = len(df)
-
-    print '[INFO] Number of records cleaned: %d' %(initial_rows - cleaned_rows)
     print '[INFO] Number of records left after cleaning: %d' %cleaned_rows
     
+    #restack data into 3 columns
+    #col1 = respondent_id, col2 = question_id, col3 = response_id
+    if cf['stack']:
+        print 'stacking logic here'
+
+
     return df
 
 
-def to_sql(df, connection = None):
+def to_sql(cf,spss_df,punch_data):
     #take in data fram and push to sql
-    import sqlalchemy
-    import pyodbc
-
-    Driver = 'pyodbc'
-    Server = 'mstelms.extranet.iext\\mstelms'
-    User = 'ipsosgroup\\jake.rifkin'
-    Password = 'Darklord18'
-    # If the database you want to connect to is the default
-    # for the SQL Server login, omit this attribute     
-    Database = 'PassiveTest'
-
-
-    if connection == None:
-        #if no connection, default to local mysql
-        connection = 'mysql+mysqldb://root:morpheus@localhost/test'
-        engine = sqlalchemy.create_engine(connection)
+    engine = sqlalchemy.create_engine(cf['type']+'+pyodbc://',creator=connect)
+    
+    if len(cf['table_name']) == 0:
+        table_name = 'P3PassiveUpload'
+        punch_name = 'P3PassiveUpload_punch'
     else:
-        engine = sqlalchemy.create_engine('mssql+pyodbc://',creator=connect)
+        table_name = cf['table_name']
+        punch_name = cf['table_name']+'_punch'
+    
+    print '[INFO] Starting sql load process for spss data at %s' %datetime.now()
+    spss_df.to_sql(table_name,engine, index = False, if_exists='replace', schema='dbo')
+    print '[INFO] SQL load finished spss data at %s' %datetime.now()
 
-    df.to_sql('passive_data',engine, index = False, chunksize = 100, if_exists='replace', schema='dbo')
+    print '[INFO] Starting sql load process for variable definitions as %s' %datetime.now()
+    punch_data.to_sql(punch_name,engine,index = True,if_exists='replace',schema='reference')
+    print '[INFO] SQL load finished spss data at %s' %datetime.now()
+
 
 def connect():
-    return pyodbc.connect("DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest")
+    new_config = ConfigParser.ConfigParser()
+    new_config.readfp(open("config.conf"))
+    
+    con = {}
+
+    con['type'] = new_config.get('Database','type')
+    con['host'] = new_config.get('Database','host')
+    con['db_user'] = new_config.get('Database','db_user')
+    con['db_name'] = new_config.get('Database','db_name')
+    con['driver'] = new_config.get('Database','driver')
+
+    connection_string = 'DRIVER={'+con['driver']+'};SERVER='+con['host']+';DATABASE='+con['db_name']
+    #"DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest"
+    return pyodbc.connect(connection_string)
+
+def unpack_config(cf_file):
+    new_config = ConfigParser.ConfigParser()
+    new_config.readfp(open(cf_file))
+    
+    cf_dict = {}
+
+    cf_dict['path'] = new_config.get('Script_Arguments','path')
+    cf_dict['dir'] = new_config.get('Script_Arguments','dir')
+    cf_dict['keep_cols'] = new_config.get('Script_Arguments','keep_cols').split(',') if len(new_config.get('Script_Arguments','keep_cols'))> 0 else None
+    cf_dict['kill_cols'] = new_config.get('Script_Arguments','kill_cols').split(',') if len(new_config.get('Script_Arguments','kill_cols'))> 0 else None
+    cf_dict['row_logic'] = [x.split(',') for x in new_config.get('Script_Arguments','row_logic').split(';')] if len(new_config.get('Script_Arguments','row_logic'))> 0 else None
+    cf_dict['stack'] = True if new_config.get('Script_Arguments','stack').lower() == 'true' else False
+    cf_dict['table_name'] = new_config.get('Script_Arguments','table_name')
+    cf_dict['type'] = new_config.get('Database','type')
+    cf_dict['host'] = new_config.get('Database','host')
+    cf_dict['db_user'] = new_config.get('Database','db_user')
+    cf_dict['db_name'] = new_config.get('Database','db_name')
+    cf_dict['driver'] = new_config.get('Database','driver')
+
+    return cf_dict
 
 def main():
     #quarterback module
-    data = read_spss()
+    cf = unpack_config("config.conf")
+   
+    #read in spss and return datafile and dictionary of dictionaries of punches
+    spss_data,punch_dict = read_spss(cf)
 
-    my_connec = "DRIVER={SQL Server};SERVER=mstelms.extranet.iext\\mstelms;DATABASE=PassiveTest"
+    #clean the data,adding in different parameters to stack or keep rows or kill rows
+    data = clean_data(cf,spss_data)
 
     #push data to sql
-    to_sql(data,my_connec)
+    #to_sql(cf,data,punch_dict)
 
 
 if __name__ == '__main__':
